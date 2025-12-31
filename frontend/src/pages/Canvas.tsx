@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useCanvas } from '../hooks/useCanvas';
 import { useAuth } from '../contexts/AuthContext';
+import { toast } from 'react-toastify';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     MousePointer2,
@@ -56,6 +57,44 @@ const Canvas: React.FC = () => {
     // State: Tools
     type Mode = 'draw' | 'select' | 'erase';
     const [mode, setMode] = useState<Mode>('draw');
+
+    // Socket Notifications
+    useEffect(() => {
+        const onConnect = () => toast.success("Connected to server", { toastId: 'connection-status' });
+        const onDisconnect = () => toast.warn("Disconnected — attempting reconnect...", { toastId: 'connection-status' });
+
+        const onError = (err: any) => {
+            // Use specific ID for Redis/System errors to prevent stacking
+            const id = err.code === 'REDIS_DOWN' || err.code === 'REDIS_ERROR' ? 'redis-error' : undefined;
+            toast.error(`Error: ${err.message || 'Unknown error'}`, { toastId: id });
+        };
+
+        const onSuccess = (data: any) => {
+            if (data.code === 'REDIS_UP') {
+                toast.dismiss('redis-error'); // Clear the error toast
+                toast.success(data.message, { toastId: 'redis-success' });
+            }
+        };
+
+        const onConnectError = (err: any) => {
+            console.error("Connection Error:", err);
+            toast.error("Connection failed. Check authentication or server status.", { toastId: 'connection-error' });
+        };
+
+        socket.on('connect', onConnect);
+        socket.on('disconnect', onDisconnect);
+        socket.on('error', onError);
+        socket.on('success', onSuccess); // Listen for custom success events
+        socket.on('connect_error', onConnectError);
+
+        return () => {
+            socket.off('connect', onConnect);
+            socket.off('disconnect', onDisconnect);
+            socket.off('error', onError);
+            socket.off('success', onSuccess);
+            socket.off('connect_error', onConnectError);
+        };
+    }, []);
     const [activeBrush, setActiveBrush] = useState<BrushType>('pen');
     const [eraserSize, setEraserSize] = useState(20);
 

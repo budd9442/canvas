@@ -5,7 +5,7 @@ import { EventEmitter } from 'events';
 dotenv.config();
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
-const USE_MOCK_REDIS = process.env.USE_MOCK_REDIS === 'true' || true; // Default to true for now as requested
+const USE_MOCK_REDIS = process.env.USE_MOCK_REDIS === 'true';
 
 class MockRedis extends EventEmitter {
     private store: Map<string, any> = new Map();
@@ -91,6 +91,12 @@ export const sub = USE_MOCK_REDIS ? new MockRedis() as unknown as Redis : new Re
 if (!USE_MOCK_REDIS) {
     redis.on('connect', () => console.log('Redis connected'));
     redis.on('error', (err) => console.error('Redis Client error:', err));
+    redis.on('reconnecting', () => console.log('Redis reconnecting...'));
+    redis.on('end', () => console.log('Redis connection ended'));
+
+    // Prevent Unhandled error events on pub/sub clients
+    pub.on('error', (err) => console.error('Redis Pub Client error:', err));
+    sub.on('error', (err) => console.error('Redis Sub Client error:', err));
 } else {
     console.log('Mock Redis initialized');
 }

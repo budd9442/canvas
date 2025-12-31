@@ -12,7 +12,7 @@ app.use(cors());
 app.use(express.json());
 
 import authRoutes from './routes/auth';
-app.use('/auth', authRoutes);
+app.use('/api/auth', authRoutes);
 
 import { setupSocket } from './socket';
 
@@ -29,7 +29,7 @@ setupSocket(io);
 
 const PORT = process.env.PORT || 3001;
 
-app.get('/health', (req, res) => {
+app.get('/api/health', (req, res) => {
     res.status(200).json({ status: 'ok' });
 });
 

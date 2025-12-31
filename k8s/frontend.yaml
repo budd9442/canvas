@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paint-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: paint-frontend
+  template:
+    metadata:
+      labels:
+        app: paint-frontend
+    spec:
+      containers:
+      - name: frontend
+        image: paint-frontend:1.0
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: paint-frontend
+spec:
+  type: ClusterIP
+  selector:
+    app: paint-frontend
+  ports:
+  - port: 80
