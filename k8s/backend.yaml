@@ -20,6 +20,8 @@ spec:
           value: redis
         - name: PORT
           value: "3000"
+        - name: DATABASE_URL
+          value: "postgresql://postgres:postgres@postgres:5432/canvas_db"
         ports:
         - containerPort: 3000
 ---

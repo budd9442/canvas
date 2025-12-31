@@ -1,5 +1,5 @@
 import { verifyToken } from './utils/jwt';
-import { saveStrokeToDynamo, getCanvasHistoryFromDynamo } from './dynamo';
+import { saveStrokeToPostgres, getCanvasHistoryFromPostgres } from './db';
 
 import { Server, Socket } from 'socket.io';
 import { redis } from './redis';
@@ -103,7 +103,7 @@ export const setupSocket = (io: Server) => {
                 socket.join(`canvas:${canvasId}`);
 
                 // Load history from DynamoDB
-                const parsedObjects = await getCanvasHistoryFromDynamo(canvasId);
+                const parsedObjects = await getCanvasHistoryFromPostgres(canvasId);
 
                 socket.emit('init_canvas', parsedObjects);
             } catch (err) {
@@ -138,7 +138,7 @@ export const setupSocket = (io: Server) => {
                     };
 
                     // Save to DynamoDB
-                    await saveStrokeToDynamo(canvasId, orderedStroke);
+                    await saveStrokeToPostgres(canvasId, orderedStroke);
 
                     // Broadcast to others
                     socket.to(`canvas:${canvasId}`).emit('stroke', orderedStroke);
