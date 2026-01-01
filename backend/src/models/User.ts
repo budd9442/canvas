@@ -1,42 +1,44 @@
-import { redis } from '../redis';
+import { query } from '../db';
 import bcrypt from 'bcryptjs';
-import { v4 as uuidv4 } from 'uuid';
 
 export interface User {
-    id: string;
+    id: number;
     username: string;
     passwordHash: string;
     role: 'viewer' | 'editor' | 'admin';
 }
 
 export const createUser = async (username: string, password: string, role: 'viewer' | 'editor' | 'admin' = 'editor'): Promise<User> => {
-    const existingId = await redis.get(`username:${username}`);
-    if (existingId) {
+    // Check if user exists
+    const existing = await findUserByUsername(username);
+    if (existing) {
         throw new Error('Username already exists');
     }
 
-    const id = uuidv4();
     const passwordHash = await bcrypt.hash(password, 10);
 
-    const user: User = { id, username, passwordHash, role };
+    const res = await query(
+        'INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3) RETURNING id, username, password_hash as "passwordHash", role',
+        [username, passwordHash, role]
+    );
 
-    // Transaction to save user and username mapping
-    const multi = redis.multi();
-    multi.hset(`users:${id}`, user);
-    multi.set(`username:${username}`, id);
-    await multi.exec();
-
-    return user;
+    return res.rows[0];
 };
 
 export const findUserByUsername = async (username: string): Promise<User | null> => {
-    const id = await redis.get(`username:${username}`);
-    if (!id) return null;
-    return findUserById(id);
+    const res = await query(
+        'SELECT id, username, password_hash as "passwordHash", role FROM users WHERE username = $1',
+        [username]
+    );
+    if (res.rows.length === 0) return null;
+    return res.rows[0];
 };
 
-export const findUserById = async (id: string): Promise<User | null> => {
-    const user = await redis.hgetall(`users:${id}`);
-    if (!user || !user.id) return null;
-    return user as unknown as User;
+export const findUserById = async (id: number): Promise<User | null> => {
+    const res = await query(
+        'SELECT id, username, password_hash as "passwordHash", role FROM users WHERE id = $1',
+        [id]
+    );
+    if (res.rows.length === 0) return null;
+    return res.rows[0];
 };

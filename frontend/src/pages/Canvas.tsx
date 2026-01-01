@@ -58,10 +58,33 @@ const Canvas: React.FC = () => {
     type Mode = 'draw' | 'select' | 'erase';
     const [mode, setMode] = useState<Mode>('draw');
 
+    // State: Ban
+    // @ts-ignore
+    const [isBanned, setIsBanned] = useState(false);
+    // @ts-ignore
+    const [banMessage, setBanMessage] = useState("");
+
     // Socket Notifications
     useEffect(() => {
         const onConnect = () => toast.success("Connected to server", { toastId: 'connection-status' });
-        const onDisconnect = () => toast.warn("Disconnected — attempting reconnect...", { toastId: 'connection-status' });
+        const onDisconnect = (reason: string) => {
+            if (reason === 'io server disconnect') {
+                // Explicit disconnection by server (likely ban or kick)
+                setIsBanned(true);
+                setBanMessage("Your connection was closed by the server.");
+                toast.error("Disconnected by server.", { toastId: 'connection-status' });
+            } else {
+                toast.warn("Disconnected — attempting reconnect...", { toastId: 'connection-status' });
+            }
+        };
+
+        const onBanned = (data: { message: string }) => {
+            console.log("Received Ban Event:", data);
+            setIsBanned(true);
+            setBanMessage(data.message);
+            setMode('select'); // Disable drawing
+            socket.disconnect(); // Ensure disconnect implies no retry loop from this side if needed, but 'disconnect' from server usually handles it.
+        };
 
         const onError = (err: any) => {
             // Use specific ID for Redis/System errors to prevent stacking
@@ -78,11 +101,25 @@ const Canvas: React.FC = () => {
 
         const onConnectError = (err: any) => {
             console.error("Connection Error:", err);
-            toast.error("Connection failed. Check authentication or server status.", { toastId: 'connection-error' });
+
+            const msg = err.message || "";
+
+            // Check for Ban
+            if (msg.toLowerCase().includes('banned') || msg.includes('User not found')) {
+                setIsBanned(true);
+                setBanMessage("Account suspended or not found.");
+                socket.disconnect(); // Stop retrying
+            } else {
+                // Only show toast if not just polling error to avoid spam
+                if (msg !== 'xhr poll error') {
+                    toast.error(`Connection failed: ${msg}`, { toastId: 'connection-error' });
+                }
+            }
         };
 
         socket.on('connect', onConnect);
         socket.on('disconnect', onDisconnect);
+        socket.on('banned', onBanned);
         socket.on('error', onError);
         socket.on('success', onSuccess); // Listen for custom success events
         socket.on('connect_error', onConnectError);
@@ -90,6 +127,7 @@ const Canvas: React.FC = () => {
         return () => {
             socket.off('connect', onConnect);
             socket.off('disconnect', onDisconnect);
+            socket.off('banned', onBanned);
             socket.off('error', onError);
             socket.off('success', onSuccess);
             socket.off('connect_error', onConnectError);
@@ -165,6 +203,35 @@ const Canvas: React.FC = () => {
 
     return (
         <div className="flex flex-col h-screen w-full bg-background relative overflow-hidden">
+
+            {/* Banned Overlay */}
+            {isBanned && (
+                <div className="absolute inset-0 z-[100] bg-red-900/80 backdrop-blur-sm flex items-center justify-center p-4">
+                    <motion.div
+                        initial={{ scale: 0.9, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        className="bg-zinc-900 border border-red-500/50 p-8 rounded-2xl shadow-2xl max-w-md w-full text-center space-y-6"
+                    >
+                        <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mx-auto">
+                            <LogOut size={40} className="text-red-500" />
+                        </div>
+
+                        <div className="space-y-2">
+                            <h2 className="text-3xl font-bold text-white">Access Revoked</h2>
+                            <p className="text-zinc-400">
+                                {banMessage || "You have been banned from this session."}
+                            </p>
+                        </div>
+
+                        <button
+                            onClick={handleLogout}
+                            className="w-full py-4 bg-white text-black font-bold text-lg rounded-xl hover:bg-zinc-200 transition-colors"
+                        >
+                            Return to Login
+                        </button>
+                    </motion.div>
+                </div>
+            )}
 
             {/* 1. Top Navigation Bar */}
             <header className="h-14 bg-[#242424] text-white flex items-center justify-between px-4 z-20 shadow-md">

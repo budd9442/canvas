@@ -12,12 +12,20 @@ spec:
       labels:
         app: paint-backend
     spec:
+      serviceAccountName: backend-sa
       containers:
       - name: backend
-        image: paint-backend:1.1
+        image: paint-backend:v6
+        resources:
+          requests:
+            cpu: "400m"   # 0.4 CPU (Further increased)
+            memory: "256Mi"
+          limits:
+            cpu: "800m"   # 0.8 CPU
+            memory: "512Mi"
         env:
-        - name: REDIS_HOST
-          value: redis
+        - name: REDIS_URL
+          value: "redis://redis:6379"
         - name: PORT
           value: "3000"
         - name: DATABASE_URL

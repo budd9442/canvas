@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: paint-frontend:1.0
+        image: paint-frontend:v6
         ports:
         - containerPort: 80
 ---

@@ -1,4 +1,15 @@
 apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
 kind: Service
 metadata:
   name: postgres
@@ -37,3 +48,10 @@ spec:
         ports:
         - containerPort: 5432
           name: postgres
+        volumeMounts:           # <--- NEW
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data
+      volumes:                  # <--- NEW
+      - name: postgres-storage
+        persistentVolumeClaim:
+          claimName: postgres-pvc

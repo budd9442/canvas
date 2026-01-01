@@ -19,3 +19,12 @@ export const authenticateToken = (req: AuthRequest, res: Response, next: NextFun
         return res.sendStatus(403);
     }
 };
+
+export const checkRole = (role: string) => {
+    return (req: AuthRequest, res: Response, next: NextFunction) => {
+        if (!req.user || req.user.role !== role) {
+            return res.status(403).json({ error: 'Access denied: Insufficient privileges' });
+        }
+        next();
+    };
+};

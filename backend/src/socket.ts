@@ -1,5 +1,5 @@
 import { verifyToken } from './utils/jwt';
-import { saveStrokeToPostgres, getCanvasHistoryFromPostgres } from './db';
+import { saveStrokeToPostgres, getCanvasHistoryFromPostgres, query } from './db';
 
 import { Server, Socket } from 'socket.io';
 import { redis } from './redis';
@@ -79,7 +79,7 @@ export const setupSocket = (io: Server) => {
         }
     });
 
-    io.use((socket, next) => {
+    io.use(async (socket, next) => {
         const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.split(' ')[1];
 
         if (!token) {
@@ -87,9 +87,22 @@ export const setupSocket = (io: Server) => {
         }
 
         try {
-            const user = verifyToken(token);
-            socket.data.user = user;
-            next();
+            const decoded = verifyToken(token);
+            if (decoded && typeof decoded !== 'string' && decoded.id) {
+                // Verify user exists in DB (in case of ban/deletion)
+                const userResult = await query('SELECT id, username, role FROM users WHERE id = $1', [decoded.id]);
+
+                if (userResult.rows.length === 0) {
+                    console.log(`[Auth] Rejected connection for banned/deleted user: ${decoded.id}`);
+                    return next(new Error('User not found or banned'));
+                }
+
+                // Attach user info to socket
+                socket.data.user = userResult.rows[0];
+                next();
+            } else {
+                next(new Error("Authentication error: Invalid token"));
+            }
         } catch (err) {
             next(new Error('Authentication error: Invalid token'));
         }
@@ -97,6 +110,27 @@ export const setupSocket = (io: Server) => {
 
     io.on('connection', (socket: Socket) => {
         console.log('Client connected:', socket.id);
+
+        // Immediate Room Join & Admin Notification
+        if (socket.data.user) {
+            socket.join('global:users');
+            socket.join(`user:${socket.data.user.id}`);
+
+            // If user is Admin, join admin room for updates
+            if (socket.data.user.role === 'admin') {
+                console.log(`Admin connected: ${socket.data.user.username} (${socket.id})`);
+                socket.join('admin');
+            }
+
+            // Notify Admins (exclude self if needed, but useful for list consistency)
+            io.to('admin').emit('admin:user-joined', {
+                socketId: socket.id,
+                id: socket.data.user.id,
+                username: socket.data.user.username,
+                role: socket.data.user.role,
+                joinedAt: new Date()
+            });
+        }
 
         socket.on('join_canvas', async (canvasId: string) => {
             try {
@@ -112,38 +146,23 @@ export const setupSocket = (io: Server) => {
             }
         });
 
+        // ... draw_stroke handler ...
         socket.on('draw_stroke', async (data: { canvasId: string; stroke: FabricObject }) => {
             const { canvasId, stroke } = data;
 
             try {
                 const locked = await acquireLock(canvasId);
                 if (!locked) {
-                    // Start of a distributed concurrency handling strategy
-                    // For now, silently drop or maybe notify client to retry?
-                    // User req said "No silent corruption", dropping valid strokes because of lock contention is not corruption but data loss if not handled.
-                    // But 'locked' usually means another write is happening.
-                    // Let's emit a 'write_failed' for feedback?
-                    // socket.emit('error', { message: "Could not acquire lock, try again", code: "LOCK_ERROR" });
                     return;
                 }
 
                 try {
-                    // Generage Sequence Number (Total Ordering via Redis)
                     const seq = await redis.incr(`canvas:${canvasId}:sequence`);
+                    const orderedStroke = { ...stroke, seq, ts: Date.now() };
 
-                    const orderedStroke = {
-                        ...stroke,
-                        seq,
-                        ts: Date.now()
-                    };
-
-                    // Save to DynamoDB
                     await saveStrokeToPostgres(canvasId, orderedStroke);
 
-                    // Broadcast to others
                     socket.to(`canvas:${canvasId}`).emit('stroke', orderedStroke);
-
-                    // Confirm success to sender (optional, good for fault tolerance UI)
                     socket.emit('stroke_ack', { seq: orderedStroke.seq });
 
                 } finally {
@@ -156,13 +175,19 @@ export const setupSocket = (io: Server) => {
         });
 
         socket.on('clear_canvas', async (canvasId: string) => {
-            // TODO: check admin role here via socket.data or similar if auth is integrated in socket
+            // Basic role check if data.user provided
+            if (socket.data.user?.role !== 'admin') {
+                return; // or emit error
+            }
             await redis.del(`canvas:${canvasId}:objects`);
             io.to(`canvas:${canvasId}`).emit('clear_canvas');
         });
 
         socket.on('disconnect', () => {
             console.log('Client disconnected:', socket.id);
+            if (socket.data.user) {
+                io.to('admin').emit('admin:user-left', { socketId: socket.id, id: socket.data.user.id });
+            }
         });
     });
 };

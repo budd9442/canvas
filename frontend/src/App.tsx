@@ -12,11 +12,22 @@ const PrivateRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => 
     return isAuthenticated ? <>{children}</> : <Navigate to="/login" />;
 };
 
+import AdminPanel from './components/AdminPanel';
+
+const AdminWrapper: React.FC = () => {
+    const { user } = useAuth();
+    if (user && user.role === 'admin') {
+        return <AdminPanel />;
+    }
+    return null;
+};
+
 const App: React.FC = () => {
     return (
         <Router>
             <AuthProvider>
                 <ToastContainer position="top-right" autoClose={3000} />
+                <AdminWrapper />
                 <Routes>
                     <Route path="/login" element={<Login />} />
                     <Route path="/register" element={<Register />} />

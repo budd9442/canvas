@@ -14,18 +14,32 @@ app.use(express.json());
 import authRoutes from './routes/auth';
 app.use('/api/auth', authRoutes);
 
+import adminRoutes from './routes/admin';
+app.use('/api/admin', adminRoutes);
+
 import { setupSocket } from './socket';
+
+import { createAdapter } from '@socket.io/redis-adapter';
+import { pub, sub } from './redis';
+import { setupMonitor } from './k8s/monitor';
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
+    adapter: createAdapter(pub, sub),
     cors: {
         origin: "*",
         methods: ["GET", "POST"]
     }
 });
 
+// Share io instance with routes
+app.set('io', io);
+
 // Setup Socket Logic
 setupSocket(io);
+
+// Setup K8s Monitor
+setupMonitor(io);
 
 const PORT = process.env.PORT || 3001;
 
@@ -33,13 +47,7 @@ app.get('/api/health', (req, res) => {
     res.status(200).json({ status: 'ok' });
 });
 
-io.on('connection', (socket) => {
-    console.log('Client connected:', socket.id);
-
-    socket.on('disconnect', () => {
-        console.log('Client disconnected:', socket.id);
-    });
-});
+// io.on connection handled in socket.ts
 
 httpServer.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);

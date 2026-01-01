@@ -16,7 +16,7 @@ WORKDIR /app
 
 COPY package*.json ./
 # Install only production dependencies
-RUN npm ci --only=production
+RUN npm install --omit=dev
 
 COPY --from=builder /app/dist ./dist
 # Copy env file if needed, or expect it to be mounted/passed at runtime.

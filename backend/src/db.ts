@@ -21,12 +21,39 @@ CREATE TABLE IF NOT EXISTS strokes (
 );
 `;
 
+const USERS_TABLE = `
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(50) DEFAULT 'user',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+`;
+
 export const initDB = async () => {
     try {
         await pool.query(STROKES_TABLE);
-        console.log('Database initialized: strokes table ready.');
+        await pool.query(USERS_TABLE);
+        console.log('Database initialized: strokes and users tables ready.');
+        await initUsers();
     } catch (err) {
         console.error('Error initializing database:', err);
+    }
+};
+
+import bcrypt from 'bcryptjs';
+
+const initUsers = async () => {
+    try {
+        const res = await pool.query('SELECT * FROM users WHERE username = $1', ['admin']);
+        if (res.rows.length === 0) {
+            const hashedPassword = await bcrypt.hash('admin', 10);
+            await pool.query('INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3)', ['admin', hashedPassword, 'admin']);
+            console.log('Default admin user created.');
+        }
+    } catch (err) {
+        console.error('Error creating default admin:', err);
     }
 };
 
@@ -35,15 +62,10 @@ initDB();
 
 export const saveStrokeToPostgres = async (canvasId: string, stroke: any) => {
     const text = 'INSERT INTO strokes(canvas_id, stroke_id, stroke_data, seq) VALUES($1, $2, $3, $4) RETURNING *';
-    // Use stroke.seq if provided (from Redis), otherwise let Postgres generate it?
-    // Actually, we are using Redis for global ordering (seq). We should probably store that seq.
-    // However, the table schema I proposed above has `seq SERIAL`. If we want to use Redis seq, we should remove SERIAL or override it.
-    // Let's adjust schema to just `seq BIGINT`.
     const values = [canvasId, `stroke:${stroke.seq}`, JSON.stringify(stroke), stroke.seq];
 
     try {
         await pool.query(text, values);
-        // console.log(`Saved stroke ${stroke.seq} to Postgres`);
     } catch (err) {
         console.error('Postgres Write Error:', err);
     }
