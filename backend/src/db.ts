@@ -83,3 +83,32 @@ export const getCanvasHistoryFromPostgres = async (canvasId: string) => {
         return [];
     }
 };
+export const saveStrokesBatch = async (canvasId: string, strokes: any[]): Promise<boolean> => {
+    if (strokes.length === 0) return true;
+
+    // Build parameterized query
+    // VALUES ($1, $2, $3, $4), ($5, $6, $7, $8), ...
+    const values: any[] = [];
+    let placeholders: string[] = [];
+    let counter = 1;
+
+    strokes.forEach(stroke => {
+        values.push(canvasId, `stroke:${stroke.seq}`, JSON.stringify(stroke), stroke.seq);
+        placeholders.push(`($${counter++}, $${counter++}, $${counter++}, $${counter++})`);
+    });
+
+    const text = `
+        INSERT INTO strokes(canvas_id, stroke_id, stroke_data, seq) 
+        VALUES ${placeholders.join(', ')}
+        ON CONFLICT (canvas_id, stroke_id) DO NOTHING
+    `;
+
+    try {
+        await pool.query(text, values);
+        console.log(`Batch saved: ${strokes.length} strokes`);
+        return true;
+    } catch (err) {
+        console.error('Postgres Batch Write Error:', err);
+        return false;
+    }
+};

@@ -1,5 +1,5 @@
 import { verifyToken } from './utils/jwt';
-import { saveStrokeToPostgres, getCanvasHistoryFromPostgres, query } from './db';
+import { saveStrokeToPostgres, getCanvasHistoryFromPostgres, query, saveStrokesBatch } from './db';
 
 import { Server, Socket } from 'socket.io';
 import { redis } from './redis';
@@ -17,112 +17,89 @@ const releaseLock = async (canvasId: string) => {
     await redis.del(`lock:${canvasId}`);
 };
 
-// ... (existing helper functions)
+// Batching State
+interface BatchBuffer {
+    [canvasId: string]: any[];
+}
+const batchBuffer: BatchBuffer = {};
+const BATCH_INTERVAL = 100; // ms
 
 export const setupSocket = (io: Server) => {
-    // Track Redis State to prevent alert spam
+    // Track Redis State
     let isRedisDown = false;
     let recoveryTimeout: NodeJS.Timeout | null = null;
 
-    // Global Redis Error Handling & Broadcast
-    redis.on('reconnecting', () => {
-        if (recoveryTimeout) {
-            clearTimeout(recoveryTimeout);
-            recoveryTimeout = null;
-        }
+    // START BATCH LOOP
+    // START BATCH LOOP
+    const flush = async () => {
+        const promises = Object.keys(batchBuffer).map(async (canvasId) => {
+            const strokes = batchBuffer[canvasId];
+            if (strokes && strokes.length > 0) {
+                // Snapshot the current strokes to save
+                const strokesToSave = [...strokes];
 
-        if (!isRedisDown) {
-            isRedisDown = true;
-            io.emit('error', {
-                message: 'System Alert: Database connection lost. Writes may fail.',
-                code: 'REDIS_DOWN'
-            });
-        }
-    });
+                // 1. Persistence (wait for success)
+                const success = await saveStrokesBatch(canvasId, strokesToSave);
 
-    redis.on('close', () => {
-        // Connection closed implies instability
-        if (recoveryTimeout) {
-            clearTimeout(recoveryTimeout);
-            recoveryTimeout = null;
-        }
-    });
+                if (success) {
+                    // 2. Broadcast (could be done optimistically before save, but here we do it after to be safe? 
+                    // No, existing code did it here. Keeping order.)
+                    io.to(`canvas:${canvasId}`).emit('batch_strokes', strokesToSave);
 
-    redis.on('error', (err) => {
-        // Any error implies instability, so cancel the recovery timer
-        if (recoveryTimeout) {
-            clearTimeout(recoveryTimeout);
-            recoveryTimeout = null;
-        }
+                    // 3. Clear JUST the saved strokes
+                    // We must be careful if new strokes were added while we were saving.
+                    // Since JS is single-threaded, `batchBuffer[canvasId]` might have grown.
+                    // We only want to remove the ones we saved.
 
-        if (err.message.includes('ECONNREFUSED') || err.message.includes('ECONNRESET')) {
-            if (!isRedisDown) {
-                isRedisDown = true;
-                io.emit('error', {
-                    message: 'System Alert: Database connection failed.',
-                    code: 'REDIS_ERROR'
-                });
+                    // Optimization: If the buffer length is exactly what we saved, we can just delete/clear.
+                    if (batchBuffer[canvasId].length === strokesToSave.length) {
+                        delete batchBuffer[canvasId];
+                    } else {
+                        // Remove the first N items
+                        batchBuffer[canvasId].splice(0, strokesToSave.length);
+                    }
+                } else {
+                    console.warn(`Failed to save batch for ${canvasId}, retrying next tick...`);
+                }
             }
-        }
-    });
+        });
 
-    // Use 'ready' instead of 'connect' to ensure Redis is actually usable
-    redis.on('ready', () => {
-        if (isRedisDown) {
-            // Wait for stability before announcing
-            if (recoveryTimeout) clearTimeout(recoveryTimeout);
-            recoveryTimeout = setTimeout(() => {
-                isRedisDown = false;
-                io.emit('success', { message: 'System Alert: Database connection restored.', code: 'REDIS_UP' });
-                recoveryTimeout = null;
-            }, 3000);
-        }
-    });
+        await Promise.all(promises);
+        setTimeout(flush, BATCH_INTERVAL);
+    };
+
+    // Start the loop
+    flush();
+
+    // Redis Error Listeners
+    redis.on('reconnecting', () => { if (recoveryTimeout) { clearTimeout(recoveryTimeout); recoveryTimeout = null; } if (!isRedisDown) { isRedisDown = true; io.emit('error', { message: 'System Alert: DB Lost', code: 'REDIS_DOWN' }); } });
+    redis.on('close', () => { if (recoveryTimeout) clearTimeout(recoveryTimeout); });
+    redis.on('error', (err) => { if (recoveryTimeout) clearTimeout(recoveryTimeout); if (err.message.includes('ECONN')) { if (!isRedisDown) { isRedisDown = true; io.emit('error', { message: 'System Alert: DB Failed', code: 'REDIS_ERROR' }); } } });
+    redis.on('ready', () => { if (isRedisDown) { if (recoveryTimeout) clearTimeout(recoveryTimeout); recoveryTimeout = setTimeout(() => { isRedisDown = false; io.emit('success', { message: 'System Alert: DB Restored', code: 'REDIS_UP' }); }, 3000); } });
 
     io.use(async (socket, next) => {
         const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.split(' ')[1];
-
-        if (!token) {
-            return next(new Error('Authentication error: No token provided'));
-        }
-
+        if (!token) return next(new Error('Authentication error: No token provided'));
         try {
             const decoded = verifyToken(token);
             if (decoded && typeof decoded !== 'string' && decoded.id) {
-                // Verify user exists in DB (in case of ban/deletion)
                 const userResult = await query('SELECT id, username, role FROM users WHERE id = $1', [decoded.id]);
-
-                if (userResult.rows.length === 0) {
-                    console.log(`[Auth] Rejected connection for banned/deleted user: ${decoded.id}`);
-                    return next(new Error('User not found or banned'));
-                }
-
-                // Attach user info to socket
+                if (userResult.rows.length === 0) return next(new Error('User not found or banned'));
                 socket.data.user = userResult.rows[0];
                 next();
-            } else {
-                next(new Error("Authentication error: Invalid token"));
-            }
-        } catch (err) {
-            next(new Error('Authentication error: Invalid token'));
-        }
+            } else { next(new Error("Authentication error: Invalid token")); }
+        } catch (err) { next(new Error('Authentication error: Invalid token')); }
     });
 
     io.on('connection', (socket: Socket) => {
         console.log('Client connected:', socket.id);
 
-        // Immediate Room Join & Admin Notification
         if (socket.data.user) {
             socket.join('global:users');
             socket.join(`user:${socket.data.user.id}`);
-
-            // If user is Admin, join admin room for updates
             if (socket.data.user.role === 'admin') {
-                console.log(`Admin connected: ${socket.data.user.username} (${socket.id})`);
                 socket.join('admin');
             }
-
-            // Notify Admins (exclude self if needed, but useful for list consistency)
             io.to('admin').emit('admin:user-joined', {
                 socketId: socket.id,
                 id: socket.data.user.id,
@@ -136,38 +113,65 @@ export const setupSocket = (io: Server) => {
             try {
                 socket.join(`canvas:${canvasId}`);
 
-                // Load history from DynamoDB
-                const parsedObjects = await getCanvasHistoryFromPostgres(canvasId);
+                // Fetch ALL strokes
+                const allStrokes = await getCanvasHistoryFromPostgres(canvasId);
+                const total = allStrokes.length;
 
-                socket.emit('init_canvas', parsedObjects);
+                // 1. Alert Start
+                socket.emit('init_canvas_start', { total });
+
+                if (total === 0) {
+                    socket.emit('init_canvas_end');
+                    return;
+                }
+
+                // 2. Stream Chunks (non-blocking)
+                const CHUNK_SIZE = 5000;
+                let processed = 0;
+
+                const sendChunk = () => {
+                    if (processed >= total) {
+                        socket.emit('init_canvas_end');
+                        return;
+                    }
+
+                    const chunk = allStrokes.slice(processed, processed + CHUNK_SIZE);
+                    socket.emit('init_canvas_chunk', chunk);
+                    processed += CHUNK_SIZE;
+
+                    // Yield to event loop
+                    setImmediate(sendChunk);
+                };
+
+                sendChunk();
+
             } catch (err) {
-                console.error('Error joining canvas:', err);
+                console.error("Join Error:", err);
                 socket.emit('error', { message: "Failed to load canvas history", code: "INIT_ERROR" });
             }
         });
 
-        // ... draw_stroke handler ...
         socket.on('draw_stroke', async (data: { canvasId: string; stroke: FabricObject }) => {
+            console.log(`[TRACE] Received draw_stroke from ${socket.id}`, data.canvasId);
             const { canvasId, stroke } = data;
-
             try {
-                const locked = await acquireLock(canvasId);
-                if (!locked) {
-                    return;
+                // ATOMIC SEQ (No Lock)
+                const seq = await redis.incr(`canvas:${canvasId}:sequence`);
+
+                // Attach senderSocketId to filter on frontend
+                // @ts-ignore
+                const orderedStroke = { ...stroke, seq, ts: Date.now(), senderSocketId: socket.id };
+
+                // BATCH BUFFERING ONLY
+                if (!batchBuffer[canvasId]) {
+                    batchBuffer[canvasId] = [];
                 }
+                batchBuffer[canvasId].push(orderedStroke);
 
-                try {
-                    const seq = await redis.incr(`canvas:${canvasId}:sequence`);
-                    const orderedStroke = { ...stroke, seq, ts: Date.now() };
+                // ACK sending client immediately
+                socket.emit('stroke_ack', { seq: orderedStroke.seq });
+                console.log(`Sending ACK to ${socket.id} for seq ${orderedStroke.seq}`);
 
-                    await saveStrokeToPostgres(canvasId, orderedStroke);
-
-                    socket.to(`canvas:${canvasId}`).emit('stroke', orderedStroke);
-                    socket.emit('stroke_ack', { seq: orderedStroke.seq });
-
-                } finally {
-                    await releaseLock(canvasId);
-                }
             } catch (err) {
                 console.error('Error processing stroke:', err);
                 socket.emit('error', { message: "Failed to process stroke", code: "WRITE_ERROR" });
@@ -175,16 +179,14 @@ export const setupSocket = (io: Server) => {
         });
 
         socket.on('clear_canvas', async (canvasId: string) => {
-            // Basic role check if data.user provided
-            if (socket.data.user?.role !== 'admin') {
-                return; // or emit error
-            }
+            if (socket.data.user?.role !== 'admin') return;
             await redis.del(`canvas:${canvasId}:objects`);
+            await redis.del(`canvas:${canvasId}:sequence`); // Reset seq? Optional.
+            await query('DELETE FROM strokes WHERE canvas_id = $1', [canvasId]); // Hard Delete
             io.to(`canvas:${canvasId}`).emit('clear_canvas');
         });
 
         socket.on('disconnect', () => {
-            console.log('Client disconnected:', socket.id);
             if (socket.data.user) {
                 io.to('admin').emit('admin:user-left', { socketId: socket.id, id: socket.data.user.id });
             }

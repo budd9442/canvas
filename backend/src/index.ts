@@ -17,6 +17,9 @@ app.use('/api/auth', authRoutes);
 import adminRoutes from './routes/admin';
 app.use('/api/admin', adminRoutes);
 
+import canvasRoutes from './routes/canvas';
+app.use('/api/canvas', canvasRoutes);
+
 import { setupSocket } from './socket';
 
 import { createAdapter } from '@socket.io/redis-adapter';
@@ -26,6 +29,7 @@ import { setupMonitor } from './k8s/monitor';
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
     adapter: createAdapter(pub, sub),
+    maxHttpBufferSize: 1e8, // 100 MB
     cors: {
         origin: "*",
         methods: ["GET", "POST"]

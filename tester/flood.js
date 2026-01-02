@@ -1,173 +1,196 @@
 const axios = require('axios');
 const io = require('socket.io-client');
 const { randomBytes } = require('crypto');
+const { Jimp } = require('jimp');
 
 // CONFIGURATION
-const TARGET_HOST = 'canvas.budd.codes'; // Backend URL (Direct or via Ingress)
-const CONCURRENCY = 20; // Number of "Artists"
+const TARGET_HOST = 'https://canvas.budd.codes';
+const CONCURRENCY = 30;
 const CANVAS_ID = 'default';
+const IMG_URL = process.argv[2] || 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/1280px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg';
 
-// Color Palette (Vibrant)
-const COLORS = [
-  '#FF5733', '#33FF57', '#3357FF', '#FF33A1', '#33FFF5',
-  '#F533FF', '#FFFF33', '#FF8C33', '#8C33FF', '#33FF8C',
-  '#00d2ff', '#3a7bd5', '#f12711', '#f5af19', '#654ea3'
-];
-
-// Helper: Random string
 const randStr = (len = 8) => randomBytes(len).toString('hex');
 
-// Helper: Random int
-const randInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+let SHARED_IMAGE = null;
+let IMG_W = 0;
+let IMG_H = 0;
 
-class ArtBot {
+class ImageBot {
   constructor(id) {
     this.id = id;
-    this.username = `artist_${randStr(4)}`;
+    this.username = `painter_${randStr(4)}`;
     this.password = 'password123';
     this.token = null;
     this.socket = null;
-    this.color = COLORS[randInt(0, COLORS.length - 1)];
-    this.mode = randInt(0, 3); // 0: Spiral, 1: Wave, 2: Random Walk, 3: Burst
-    this.x = randInt(100, 700);
-    this.y = randInt(100, 500);
-    this.angle = 0;
-    this.radius = 0;
   }
 
   async start() {
     try {
-      console.log(`[Bot ${this.id}] Registering as ${this.username}...`);
-
-      // 1. Register
       try {
-        await axios.post(`${TARGET_HOST}/api/auth/register`, {
-          username: this.username,
-          password: this.password
-        });
-      } catch (e) {
-        // Ignore if exists
-      }
+        await axios.post(`${TARGET_HOST}/api/auth/register`, { username: this.username, password: this.password });
+      } catch (e) { }
 
-      // 2. Login
-      const res = await axios.post(`${TARGET_HOST}/api/auth/login`, {
-        username: this.username,
-        password: this.password
-      });
-
+      const res = await axios.post(`${TARGET_HOST}/api/auth/login`, { username: this.username, password: this.password });
       this.token = res.data.token;
-      console.log(`[Bot ${this.id}] Logged in. Connecting socket...`);
 
-      // 3. Connect Socket
       this.socket = io(TARGET_HOST, {
         auth: { token: this.token },
-        transports: ['websocket']
+        transports: ['websocket'],
+        reconnection: true
       });
 
       this.socket.on('connect', () => {
-        console.log(`[Bot ${this.id}] Connected! Joining canvas...`);
         this.socket.emit('join_canvas', CANVAS_ID);
         this.startPainting();
       });
 
-      this.socket.on('error', (err) => {
-        console.error(`[Bot ${this.id}] Socket Error:`, err);
-      });
-
-      this.socket.on('disconnect', () => {
-        console.log(`[Bot ${this.id}] Disconnected.`);
-      });
-
     } catch (err) {
-      console.error(`[Bot ${this.id}] Setup Failed:`, err.message);
+      setTimeout(() => this.start(), 5000);
     }
   }
 
   startPainting() {
-    // Paint loop
-    const interval = randInt(100, 500); // Speed variation
-
-    setInterval(() => {
-      if (!this.socket || !this.socket.connected) return;
+    const paint = () => {
+      if (!this.socket || !this.socket.connected) {
+        setTimeout(paint, 100);
+        return;
+      }
 
       const stroke = this.generateStroke();
       if (stroke) {
-        this.socket.emit('draw_stroke', {
-          canvasId: CANVAS_ID,
-          stroke: stroke
-        });
+        this.socket.emit('draw_stroke', { canvasId: CANVAS_ID, stroke: stroke });
       }
-    }, interval);
+      setImmediate(paint);
+    };
+    paint();
   }
 
   generateStroke() {
-    let nextX, nextY;
+    if (!SHARED_IMAGE) return null;
 
-    // Algorithmic Movement
-    switch (this.mode) {
-      case 0: // Spiral
-        this.angle += 0.2;
-        this.radius += 0.5;
-        nextX = 400 + Math.cos(this.angle) * this.radius;
-        nextY = 300 + Math.sin(this.angle) * this.radius;
-        break;
+    const x = Math.floor(Math.random() * IMG_W);
+    const y = Math.floor(Math.random() * IMG_H);
 
-      case 1: // Sine Wave
-        this.x += 5;
-        if (this.x > 800) this.x = 0;
-        nextX = this.x;
-        nextY = 300 + Math.sin(this.x * 0.05) * 100 + (this.id * 10);
-        break;
-
-      case 2: // Random Walk
-        nextX = this.x + randInt(-20, 20);
-        nextY = this.y + randInt(-20, 20);
-        break;
-
-      case 3: // Burst / Star
-        nextX = 400 + randInt(-300, 300);
-        nextY = 300 + randInt(-300, 300);
-        // Reset to center periodically
-        if (Math.random() > 0.9) { this.x = 400; this.y = 300; }
-        break;
+    // Jimp v1: getPixelColor might be different or same.
+    // Try standard way. If this fails, we catch it inside loop? No, this is sync.
+    // Documentation says for v1: image.getPixelColor(x, y) returns hex number.
+    // intToRGBA still exists on Jimp class? Or utils?
+    // Let's use simple bit shifting if helper fails, but let's try helper.
+    let color = 'rgba(0,0,0,1)';
+    try {
+      const hex = SHARED_IMAGE.getPixelColor(x, y);
+      // intToRGBA: {r, g, b, a}
+      const r = (hex >>> 24) & 0xFF; // Jimp hex is usually R G B A? Or 0xRRGGBBAA?
+      // Actually Jimp returns 0xRRGGBBAA.
+      const g = (hex >>> 16) & 0xFF;
+      const b = (hex >>> 8) & 0xFF;
+      const a = hex & 0xFF;
+      color = `rgba(${r},${g},${b},${a / 255})`;
+    } catch (e) {
+      // console.error(e);
     }
 
-    // Keep bounds roughly
-    nextX = Math.max(0, Math.min(800, nextX));
-    nextY = Math.max(0, Math.min(600, nextY));
+    const len = 4;
+    const angle = Math.random() * Math.PI * 2;
+    const x2 = x + Math.cos(angle) * len;
+    const y2 = y + Math.sin(angle) * len;
 
-    // Construct Fabric-like path object (simulating a line segment)
-    // Real fabric uses "M x y L x y"
-    const pathData = `M ${this.x} ${this.y} L ${nextX} ${nextY}`;
-
-    const strokeObj = {
+    return {
       type: 'path',
-      path: [['M', this.x, this.y], ['L', nextX, nextY]], // Simplified fabric path array
-      stroke: this.color,
-      strokeWidth: randInt(2, 5),
+      path: [['M', x, y], ['L', x2, y2]],
+      stroke: color,
+      strokeWidth: 4,
       fill: null,
       selectable: false,
       evented: false,
       originX: 'left',
       originY: 'top',
-      left: Math.min(this.x, nextX), // Bounding box approx
-      top: Math.min(this.y, nextY),
-      width: Math.abs(nextX - this.x),
-      height: Math.abs(nextY - this.y)
+      left: Math.min(x, x2),
+      top: Math.min(y, y2),
+      width: Math.abs(x2 - x),
+      height: Math.abs(y2 - y),
+      senderSocketId: this.socket.id
     };
-
-    // Update state
-    this.x = nextX;
-    this.y = nextY;
-
-    return strokeObj;
   }
 }
 
-// --- MAIN ---
-console.log(`🎨 Starting Art Attack with ${CONCURRENCY} bots...`);
-for (let i = 0; i < CONCURRENCY; i++) {
-  setTimeout(() => {
-    new ArtBot(i).start();
-  }, i * 100); // Stagger start
+async function main() {
+  console.log(`🖼️  Loading Image: ${IMG_URL}`);
+  try {
+    const image = await Jimp.read(IMG_URL);
+
+    // Fix: Use object syntax for resize in Jimp v1
+    image.resize({ w: 800, h: 600 });
+
+    SHARED_IMAGE = image;
+    IMG_W = 800; // image.bitmap.width;
+    IMG_H = 600; // image.bitmap.height;
+    console.log(`✅ Image Loaded (${IMG_W}x${IMG_H}). Launching ${CONCURRENCY} Painter Bots...`);
+
+
+    // ... inside main ...
+    let totalStrokesSent = 0;
+
+    // Graceful Exit
+    process.on('SIGINT', () => {
+      console.log(`\n🛑 Interrupted! Total Strokes Sent Attempted: ${totalStrokesSent.toLocaleString()}`);
+      process.exit(0);
+    });
+
+    console.log(`✅ Image Loaded (${IMG_W}x${IMG_H}). Launching ${CONCURRENCY} Painter Bots...`);
+
+    for (let i = 0; i < CONCURRENCY; i++) {
+      const bot = new ImageBot(i);
+      // HACK: attach global counter increment to bot's paint method or emit
+      // We can modify ImageBot or just increment here if we passed a callback.
+      // Let's modify ImageBot prototype or instance.
+      bot._originalEmit = bot.socket ? bot.socket.emit : null;
+      // Wait, socket is created in start().
+
+      // Easier: Modifying ImageBot class to increment global.
+
+      setTimeout(() => bot.start(), i * 20);
+    }
+  } catch (err) {
+    //...
+  }
 }
+
+// Modify ImageBot.generateStroke to increment global counter
+const originalGenerate = ImageBot.prototype.generateStroke;
+// We can't easily hook into generateStroke because it returns data.
+// We can hook into the 'paint' loop inside ImageBot?
+// Actually simpler: Just increment a global variable from inside the class if we can.
+// But class is defined above.
+// I will rewrite the class method startPainting to increment the counter.
+
+ImageBot.prototype.startPainting = function () {
+  const paint = () => {
+    if (!this.socket || !this.socket.connected) {
+      setTimeout(paint, 100);
+      return;
+    }
+
+    // Rate Limiting: 100 RPS total / 50 bots = 2 RPS per bot = 500ms delay
+    const RATE_LIMIT_DELAY = 50;
+
+    const stroke = this.generateStroke();
+    if (stroke) {
+      this.socket.emit('draw_stroke', { canvasId: CANVAS_ID, stroke: stroke });
+      if (global.totalStrokesSent !== undefined) global.totalStrokesSent++;
+    }
+
+    // Throttle loop
+    setTimeout(paint, RATE_LIMIT_DELAY);
+  };
+  paint();
+};
+
+global.totalStrokesSent = 0;
+
+process.on('SIGINT', () => {
+  console.log(`\n🛑 Interrupted! Total Strokes Sent Attempted: ${global.totalStrokesSent.toLocaleString()}`);
+  process.exit(0);
+});
+
+main();

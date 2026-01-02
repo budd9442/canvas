@@ -15,7 +15,8 @@ spec:
       serviceAccountName: backend-sa
       containers:
       - name: backend
-        image: paint-backend:v6
+        image: paint-backend:v19
+        imagePullPolicy: Never
         resources:
           requests:
             cpu: "400m"   # 0.4 CPU (Further increased)

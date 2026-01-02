@@ -17,10 +17,12 @@ import {
     ChevronLeft,
     Sparkles,
     Palette,
-    Eraser
+    Eraser,
+    RefreshCw
 } from 'lucide-react';
 import { socket } from '../socket';
 import Lanyard from '../components/Lanyard';
+import { api } from '../services/api';
 
 // Types
 type BrushType = 'pencil' | 'pen' | 'marker' | 'highlighter' | 'galaxy';
@@ -147,7 +149,7 @@ const Canvas: React.FC = () => {
 
     // Fabric Hook
     const isEditor = user ? true : false;
-    const { canvasRef } = useCanvas(
+    const { canvasRef, lastAck } = useCanvas(
         canvasId,
         mode,
         currentConfig.color,
@@ -192,12 +194,30 @@ const Canvas: React.FC = () => {
     };
 
     const isAdmin = user?.role === 'admin';
+
+    // Stats State
+    // @ts-ignore
+    const [strokeCount, setStrokeCount] = useState<number | null>(null);
+
+    const fetchStats = async () => {
+        try {
+            const res = await api.get(`/canvas/${canvasId}/stats`);
+            setStrokeCount(res.data.strokeCount);
+            toast.info(`Total Strokes: ${res.data.strokeCount}`, { autoClose: 2000 });
+        } catch (err) {
+            console.error(err);
+        }
+    };
+
+    // Initial fetch
+    useEffect(() => { fetchStats(); }, []);
+
     const handleClear = () => {
         if (isAdmin) socket.emit('clear_canvas', canvasId);
     };
 
     const handleLogout = () => {
-        logout();
+        if (logout) logout();
         navigate('/login');
     };
 
@@ -244,6 +264,20 @@ const Canvas: React.FC = () => {
                         <span className="font-semibold text-sm">Unified Canvas</span>
                         <ChevronLeft className="rotate-180 text-white/50" size={16} />
                     </div>
+                </div>
+
+                {/* Live Stats */}
+                <div className="flex items-center gap-2 bg-black/30 px-3 py-1.5 rounded-full border border-white/10">
+                    <span className="text-xs text-zinc-400">Total Strokes:</span>
+                    <span className="font-mono text-sm font-bold text-white">{strokeCount !== null ? strokeCount.toLocaleString() : '---'}</span>
+                    <button onClick={fetchStats} className="ml-2 hover:bg-white/10 p-1 rounded-full transition-colors">
+                        <RefreshCw size={14} className="text-zinc-400 hover:text-white" />
+                    </button>
+                    <div className="w-px h-4 bg-white/20 mx-2"></div>
+                    <span className="text-xs text-zinc-400">Last Ack:</span>
+                    <span className={`font-mono text-sm font-bold ${lastAck ? 'text-green-400' : 'text-zinc-500'}`}>
+                        {lastAck !== null ? lastAck : '-'}
+                    </span>
                 </div>
 
                 <div className="flex items-center gap-4">
