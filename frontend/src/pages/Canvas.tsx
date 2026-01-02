@@ -203,14 +203,17 @@ const Canvas: React.FC = () => {
         try {
             const res = await api.get(`/canvas/${canvasId}/stats`);
             setStrokeCount(res.data.strokeCount);
-            toast.info(`Total Strokes: ${res.data.strokeCount}`, { autoClose: 2000 });
         } catch (err) {
             console.error(err);
         }
     };
 
-    // Initial fetch
-    useEffect(() => { fetchStats(); }, []);
+    // Poll stats every 5 seconds
+    useEffect(() => {
+        fetchStats();
+        const interval = setInterval(fetchStats, 5000);
+        return () => clearInterval(interval);
+    }, [canvasId]);
 
     const handleClear = () => {
         if (isAdmin) socket.emit('clear_canvas', canvasId);

@@ -29,8 +29,8 @@ spec:
           value: "redis://redis:6379"
         - name: PORT
           value: "3000"
-        - name: DATABASE_URL
-          value: "postgresql://postgres:postgres@postgres:5432/canvas_db"
+        - name: DB_SHARDS
+          value: '["postgresql://postgres:postgres@postgres-0.postgres:5432/canvas_db","postgresql://postgres:postgres@postgres-1.postgres:5432/canvas_db"]'
         ports:
         - containerPort: 3000
 ---

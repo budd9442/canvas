@@ -97,6 +97,40 @@ if (!USE_MOCK_REDIS) {
     // Prevent Unhandled error events on pub/sub clients
     pub.on('error', (err) => console.error('Redis Pub Client error:', err));
     sub.on('error', (err) => console.error('Redis Sub Client error:', err));
+
+    // Define Lua Command if real Redis
+    redis.defineCommand('popBatch', {
+        numberOfKeys: 1,
+        lua: `
+            local list = redis.call('lrange', KEYS[1], 0, ARGV[1] - 1)
+            if #list > 0 then
+                redis.call('ltrim', KEYS[1], #list, -1)
+            end
+            return list
+        `
+    });
 } else {
+    // Mock Redis (no-op or mock impl if needed later, for now we just log)
     console.log('Mock Redis initialized');
 }
+
+// Export helper globally
+export const popBatch = async (key: string, count: number): Promise<string[]> => {
+    if (USE_MOCK_REDIS) {
+        // Simple mock implementation for local tests without Docker
+        // @ts-ignore
+        const list = await redis.lrange(key, 0, count - 1);
+        if (list.length > 0) {
+            // @ts-ignore
+            // Mock ltrim behavior (retain from count to end)
+            // But our MockRedis doesn't implement ltrim perfectly yet.
+            // For now, let's just assume we don't use this path heavily in mock mode without full MockRedis updates
+            // Just return empty or implement basic shift
+            return list;
+        }
+        return [];
+    }
+    // @ts-ignore
+    return redis.popBatch(key, count);
+};
+

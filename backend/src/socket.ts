@@ -1,5 +1,5 @@
 import { verifyToken } from './utils/jwt';
-import { saveStrokeToPostgres, getCanvasHistoryFromPostgres, query, saveStrokesBatch } from './db';
+import { saveStrokeToPostgres, getCanvasHistoryFromPostgres, query, saveStrokesBatch, clearCanvasStrokes } from './db';
 
 import { Server, Socket } from 'socket.io';
 import { redis } from './redis';
@@ -17,11 +17,7 @@ const releaseLock = async (canvasId: string) => {
     await redis.del(`lock:${canvasId}`);
 };
 
-// Batching State
-interface BatchBuffer {
-    [canvasId: string]: any[];
-}
-const batchBuffer: BatchBuffer = {};
+// Batching via Redis Streams (WAL)
 const BATCH_INTERVAL = 100; // ms
 
 export const setupSocket = (io: Server) => {
@@ -29,42 +25,88 @@ export const setupSocket = (io: Server) => {
     let isRedisDown = false;
     let recoveryTimeout: NodeJS.Timeout | null = null;
 
-    // START BATCH LOOP
-    // START BATCH LOOP
+    // WORKER LOOP: Peak-Lock-Trim Pattern (At-Least-Once Delivery)
     const flush = async () => {
-        const promises = Object.keys(batchBuffer).map(async (canvasId) => {
-            const strokes = batchBuffer[canvasId];
-            if (strokes && strokes.length > 0) {
-                // Snapshot the current strokes to save
-                const strokesToSave = [...strokes];
+        try {
+            // 1. Get Processing Candidates
+            const sMembersRaw = await redis.smembers('active_canvases');
+            const activeCanvases = Array.isArray(sMembersRaw) ? sMembersRaw : [];
 
-                // 1. Persistence (wait for success)
-                const success = await saveStrokesBatch(canvasId, strokesToSave);
+            if (activeCanvases.length > 0) {
+                const promises = activeCanvases.map(async (canvasId) => {
+                    const lockKey = `lock:worker:${canvasId}`;
+                    const streamKey = `stream:canvas:${canvasId}`;
 
-                if (success) {
-                    // 2. Broadcast (could be done optimistically before save, but here we do it after to be safe? 
-                    // No, existing code did it here. Keeping order.)
-                    io.to(`canvas:${canvasId}`).emit('batch_strokes', strokesToSave);
+                    // 2. Acquire Lock (Concurrency Control)
+                    // Only one worker should process a specific canvas queue at a time
+                    const tempLock = await redis.set(lockKey, "1", "EX", 5, "NX");
 
-                    // 3. Clear JUST the saved strokes
-                    // We must be careful if new strokes were added while we were saving.
-                    // Since JS is single-threaded, `batchBuffer[canvasId]` might have grown.
-                    // We only want to remove the ones we saved.
-
-                    // Optimization: If the buffer length is exactly what we saved, we can just delete/clear.
-                    if (batchBuffer[canvasId].length === strokesToSave.length) {
-                        delete batchBuffer[canvasId];
-                    } else {
-                        // Remove the first N items
-                        batchBuffer[canvasId].splice(0, strokesToSave.length);
+                    if (tempLock !== "OK") {
+                        return; // Another worker is handling this canvas
                     }
-                } else {
-                    console.warn(`Failed to save batch for ${canvasId}, retrying next tick...`);
-                }
-            }
-        });
 
-        await Promise.all(promises);
+                    try {
+                        // 3. XRANGE (Peek Items)
+                        // Read up to 50 items from the beginning of the stream
+                        // @ts-ignore
+                        const streamEntries = await redis.xrange(streamKey, '-', '+', 'COUNT', 50);
+
+                        // streamEntries format: [[id, [key, val, key, val]], ...]
+
+                        if (streamEntries && streamEntries.length > 0) {
+                            const strokesToSave: any[] = [];
+                            const connectionIds: string[] = [];
+
+                            streamEntries.forEach((entry: any) => {
+                                const id = entry[0];
+                                const fields = entry[1];
+                                // Parse fields (array of strings)
+                                // fields: ['stroke', '{"..."}']
+                                for (let i = 0; i < fields.length; i += 2) {
+                                    if (fields[i] === 'stroke') {
+                                        strokesToSave.push(JSON.parse(fields[i + 1]));
+                                        connectionIds.push(id);
+                                    }
+                                }
+                            });
+
+                            if (strokesToSave.length > 0) {
+                                // 4. PROCESS (Idempotent Insert)
+                                const success = await saveStrokesBatch(canvasId, strokesToSave);
+
+                                if (success) {
+                                    // 5. TRIM (Remove processed items)
+                                    // XDEL the specific IDs we processed.
+                                    // @ts-ignore
+                                    await redis.xdel(streamKey, ...connectionIds);
+
+                                    // Broadcast
+                                    io.to(`canvas:${canvasId}`).emit('batch_strokes', strokesToSave);
+                                } else {
+                                    console.warn(`[StreamWorker] DB Write Failed for ${canvasId}. Retrying next tick.`);
+                                }
+                            }
+                        } else {
+                            // Empty Stream? Remove from active set
+                            // @ts-ignore
+                            const len = await redis.xlen(streamKey);
+                            if (len === 0) {
+                                await redis.srem('active_canvases', canvasId);
+                            }
+                        }
+                    } catch (err) {
+                        console.error(`[StreamWorker] Error processing ${canvasId}:`, err);
+                    } finally {
+                        // 6. Release Lock
+                        await redis.del(lockKey);
+                    }
+                });
+                await Promise.all(promises);
+            }
+        } catch (err) {
+            console.error("Worker Loop Error:", err);
+        }
+
         setTimeout(flush, BATCH_INTERVAL);
     };
 
@@ -162,14 +204,17 @@ export const setupSocket = (io: Server) => {
                 // @ts-ignore
                 const orderedStroke = { ...stroke, seq, ts: Date.now(), senderSocketId: socket.id };
 
-                // BATCH BUFFERING ONLY
-                if (!batchBuffer[canvasId]) {
-                    batchBuffer[canvasId] = [];
-                }
-                batchBuffer[canvasId].push(orderedStroke);
+                // REDIS STREAM (WAL)
+                // 1. Add to processing set
+                await redis.sadd('active_canvases', canvasId);
 
-                // ACK sending client immediately
-                socket.emit('stroke_ack', { seq: orderedStroke.seq });
+                // 2. XADD to Stream
+                // key: stream:canvas:{id}, ID: *, fields: stroke, json
+                // @ts-ignore
+                await redis.xadd(`stream:canvas:${canvasId}`, '*', 'stroke', JSON.stringify(orderedStroke));
+
+                // ACK sending client immediately (Include client-side tempId if provided)
+                socket.emit('stroke_ack', { seq: orderedStroke.seq, tempId: stroke.tempId });
                 console.log(`Sending ACK to ${socket.id} for seq ${orderedStroke.seq}`);
 
             } catch (err) {
@@ -182,7 +227,7 @@ export const setupSocket = (io: Server) => {
             if (socket.data.user?.role !== 'admin') return;
             await redis.del(`canvas:${canvasId}:objects`);
             await redis.del(`canvas:${canvasId}:sequence`); // Reset seq? Optional.
-            await query('DELETE FROM strokes WHERE canvas_id = $1', [canvasId]); // Hard Delete
+            await clearCanvasStrokes(canvasId); // Distributed Delete
             io.to(`canvas:${canvasId}`).emit('clear_canvas');
         });
 

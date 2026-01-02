@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { query } from '../db';
+import { getCanvasTotalStrokes } from '../db';
 
 const router = Router();
 
@@ -7,8 +7,7 @@ const router = Router();
 router.get('/:id/stats', async (req, res) => {
     const { id } = req.params;
     try {
-        const result = await query('SELECT COUNT(*) FROM strokes WHERE canvas_id = $1', [id]);
-        const count = parseInt(result.rows[0].count, 10);
+        const count = await getCanvasTotalStrokes(id);
         res.json({ canvasId: id, strokeCount: count });
     } catch (err) {
         console.error('Stats Error:', err);

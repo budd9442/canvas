@@ -19,24 +19,19 @@ interface PodStats {
 
 const AdminPanel: React.FC = () => {
     const [isOpen, setIsOpen] = useState(false);
-    const [activeTab, setActiveTab] = useState<'users' | 'canvas' | 'infra'>('infra');
+    const [activeTab, setActiveTab] = useState<'users' | 'canvas' | 'infra' | 'database'>('infra');
     const [users, setUsers] = useState<User[]>([]);
     const [pods, setPods] = useState<PodStats[]>([]);
-    const [notification, setNotification] = useState<{ message: string; type: 'info' | 'error' } | null>(null);
-    const [hpaStats, setHpaStats] = useState<{
-        currentReplicas: number;
-        desiredReplicas: number;
-        minReplicas: number;
-        maxReplicas: number;
-        currentCpu: number;
-        targetCpu: number;
-    } | null>(null);
+    const [dbPods, setDbPods] = useState<PodStats[]>([]);
+    const [dbStats, setDbStats] = useState<Record<string, number>>({});
+    const [vpaStats, setVpaStats] = useState<any>(null);
 
-    // Initial Data Fetch
+    // ... (in useEffect)
     useEffect(() => {
         if (isOpen) {
             fetchUsers();
             fetchPods();
+            fetchDbPods();
         }
     }, [isOpen]);
 
@@ -55,6 +50,29 @@ const AdminPanel: React.FC = () => {
             });
         });
 
+        socket.on('admin:db-update', (data: { event: string; pod: PodStats }) => {
+            setDbPods(prev => {
+                const exists = prev.find(p => p.name === data.pod.name);
+                if (data.event === 'DELETED') {
+                    return prev.filter(p => p.name !== data.pod.name);
+                }
+                if (exists) {
+                    return prev.map(p => p.name === data.pod.name ? data.pod : p);
+                }
+                return [...prev, data.pod];
+            });
+        });
+
+        socket.on('admin:db-stats', (stats: { shardId: number; count: number; podNameSuggestion: string }[]) => {
+            setDbStats(prev => {
+                const next = { ...prev };
+                stats.forEach(s => {
+                    next[s.podNameSuggestion] = s.count;
+                });
+                return next;
+            });
+        });
+
         socket.on('admin:notification', (data: { message: string; type: 'info' | 'error' }) => {
             setNotification(data);
             setTimeout(() => setNotification(null), 5000);
@@ -62,7 +80,6 @@ const AdminPanel: React.FC = () => {
 
         // Real-time User Updates
         socket.on('admin:user-joined', (newUser: any) => {
-            // Check if user already in list (e.g. multiple tabs)
             setUsers(prev => {
                 if (prev.find(u => (u as any).socketId === newUser.socketId)) return prev;
                 return [newUser, ...prev];
@@ -79,11 +96,19 @@ const AdminPanel: React.FC = () => {
 
         return () => {
             socket.off('admin:pod-update');
+            socket.off('admin:db-update');
+            socket.off('admin:db-stats');
             socket.off('admin:notification');
             socket.off('admin:user-joined');
             socket.off('admin:user-left');
             socket.off('admin:hpa-update');
+            socket.off('admin:vpa-update');
         };
+    }, []);
+
+    useEffect(() => {
+        socket.on('admin:vpa-update', (stats) => setVpaStats(stats));
+        return () => { socket.off('admin:vpa-update'); };
     }, []);
 
     const fetchUsers = async () => {
@@ -107,6 +132,29 @@ const AdminPanel: React.FC = () => {
             console.error("Failed to fetch pods", err);
         }
     };
+
+    const fetchDbPods = async () => {
+        try {
+            const res = await axios.get('/api/admin/monitor/db', {
+                headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+            });
+            setDbPods(res.data);
+        } catch (err) {
+            console.error("Failed to fetch DB pods", err);
+        }
+    };
+
+    const [notification, setNotification] = useState<{ message: string; type: 'info' | 'error' } | null>(null);
+    const [hpaStats, setHpaStats] = useState<{
+        currentReplicas: number;
+        desiredReplicas: number;
+        minReplicas: number;
+        maxReplicas: number;
+        currentCpu: number;
+        targetCpu: number;
+    } | null>(null);
+
+    // ... (rest of useEffects/listeners are fine)
 
     const handleBan = async (id: number) => {
         if (!confirm("Ban this user?")) return;
@@ -133,6 +181,7 @@ const AdminPanel: React.FC = () => {
     };
 
     return (
+        // ... (Toggle/Toast) 
         <>
             {/* Toggle Button */}
             <button
@@ -190,15 +239,15 @@ const AdminPanel: React.FC = () => {
                 }}>
                     <h2>Admin Panel</h2>
                     <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', borderBottom: '1px solid #555' }}>
-                        <button onClick={() => setActiveTab('infra')} style={{ background: 'none', border: 'none', color: activeTab === 'infra' ? '#fff' : '#888', cursor: 'pointer', padding: '10px', fontWeight: 'bold' }}>Infra</button>
-                        <button onClick={() => setActiveTab('users')} style={{ background: 'none', border: 'none', color: activeTab === 'users' ? '#fff' : '#888', cursor: 'pointer', padding: '10px', fontWeight: 'bold' }}>Users</button>
-                        <button onClick={() => setActiveTab('canvas')} style={{ background: 'none', border: 'none', color: activeTab === 'canvas' ? '#fff' : '#888', cursor: 'pointer', padding: '10px', fontWeight: 'bold' }}>Canvas</button>
+                        <button onClick={() => setActiveTab('infra')} style={{ background: 'none', border: 'none', color: activeTab === 'infra' ? '#fff' : '#888', cursor: 'pointer', padding: '10px', fontWeight: 'bold', borderBottom: activeTab === 'infra' ? '2px solid white' : 'none' }}>Infra</button>
+                        <button onClick={() => setActiveTab('database')} style={{ background: 'none', border: 'none', color: activeTab === 'database' ? '#fff' : '#888', cursor: 'pointer', padding: '10px', fontWeight: 'bold', borderBottom: activeTab === 'database' ? '2px solid white' : 'none' }}>Database</button>
+                        <button onClick={() => setActiveTab('users')} style={{ background: 'none', border: 'none', color: activeTab === 'users' ? '#fff' : '#888', cursor: 'pointer', padding: '10px', fontWeight: 'bold', borderBottom: activeTab === 'users' ? '2px solid white' : 'none' }}>Users</button>
+                        <button onClick={() => setActiveTab('canvas')} style={{ background: 'none', border: 'none', color: activeTab === 'canvas' ? '#fff' : '#888', cursor: 'pointer', padding: '10px', fontWeight: 'bold', borderBottom: activeTab === 'canvas' ? '2px solid white' : 'none' }}>Canvas</button>
                     </div>
 
                     {activeTab === 'infra' && (
                         <div>
-                            <h3>Kubernetes Monitor</h3>
-
+                            <h3>App Cluster</h3>
                             {/* HPA Stats */}
                             {hpaStats && (
                                 <div style={{ marginBottom: '20px', padding: '15px', background: '#222', borderRadius: '8px' }}>
@@ -241,6 +290,89 @@ const AdminPanel: React.FC = () => {
                                             Status: {pod.status}<br />
                                             IP: {pod.ip}<br />
                                             Restarts: {pod.restarts}
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
+                    )}
+
+
+
+
+
+                    {activeTab === 'database' && (
+                        <div>
+                            <h3>Database Shards</h3>
+
+                            {vpaStats && (
+                                <div style={{ marginBottom: '20px', padding: '15px', background: '#1c1c1c', borderRadius: '8px', borderLeft: '4px solid #8b5cf6', fontFamily: 'monospace' }}>
+                                    <h4 style={{ margin: '0 0 15px 0', fontSize: '14px', color: '#c4b5fd' }}>Vertical Autoscaling (VPA) Status</h4>
+
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                                        <thead>
+                                            <tr style={{ color: '#888', borderBottom: '1px solid #333' }}>
+                                                <th style={{ textAlign: 'left', padding: '5px' }}>Metric</th>
+                                                <th style={{ textAlign: 'left', padding: '5px' }}>Current</th>
+                                                <th style={{ textAlign: 'left', padding: '5px' }}>Target (VPA)</th>
+                                                <th style={{ textAlign: 'left', padding: '5px', color: '#666' }}>Min / Max</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr>
+                                                <td style={{ padding: '8px 5px', color: '#ddd' }}>CPU</td>
+                                                <td style={{ padding: '8px 5px' }}>
+                                                    {vpaStats.current?.cpu === 'N/A' ?
+                                                        <span style={{ color: '#f59e0b', fontSize: '11px' }}>⚠ Unset (Restart to Apply)</span> :
+                                                        vpaStats.current?.cpu}
+                                                </td>
+                                                <td style={{ padding: '8px 5px', color: '#a78bfa', fontWeight: 'bold' }}>{vpaStats.target?.cpu || 'Pending...'}</td>
+                                                <td style={{ padding: '8px 5px', color: '#666' }}>{vpaStats.minAllowed?.cpu} / {vpaStats.maxAllowed?.cpu}</td>
+                                            </tr>
+                                            <tr>
+                                                <td style={{ padding: '8px 5px', color: '#ddd' }}>Memory</td>
+                                                <td style={{ padding: '8px 5px' }}>
+                                                    {vpaStats.current?.memory === 'N/A' ?
+                                                        <span style={{ color: '#f59e0b', fontSize: '11px' }}>⚠ Restart to Apply</span> :
+                                                        vpaStats.current?.memory}
+                                                </td>
+                                                <td style={{ padding: '8px 5px', color: '#a78bfa', fontWeight: 'bold' }}>{vpaStats.target?.memory || 'Pending...'}</td>
+                                                <td style={{ padding: '8px 5px', color: '#666' }}>{vpaStats.minAllowed?.memory} / {vpaStats.maxAllowed?.memory}</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+
+                                    <div style={{ marginTop: '15px', fontSize: '11px', color: '#666', display: 'flex', gap: '15px' }}>
+                                        <div>Mode: <strong style={{ color: '#ccc' }}>Initial</strong></div>
+                                        <div>Uncapped Est: {vpaStats.uncappedTarget?.cpu || '-'} / {vpaStats.uncappedTarget?.memory || '-'}</div>
+                                    </div>
+                                </div>
+                            )}
+
+                            <button onClick={fetchDbPods} style={{ marginBottom: '10px', padding: '5px 10px', fontSize: '12px', cursor: 'pointer' }}>Refresh DB</button>
+                            {dbPods.length === 0 ? <p>No DB pods found.</p> : (
+                                <ul style={{ listStyle: 'none', padding: 0 }}>
+                                    {dbPods.map(pod => (
+                                        <li key={pod.name} style={{
+                                            padding: '10px',
+                                            marginBottom: '5px',
+                                            background: pod.status === 'Running' ? '#1a1a1a' : '#520000',
+                                            borderLeft: `4px solid ${pod.ready ? 'blue' : 'orange'}`
+                                        }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                <div>
+                                                    <div style={{ fontWeight: 'bold', color: '#aaf' }}>{pod.name}</div>
+                                                    <div style={{ fontSize: '0.9em' }}>Status: {pod.status}</div>
+                                                    <div style={{ fontSize: '0.9em' }}>IP: {pod.ip}</div>
+                                                    <div style={{ fontSize: '0.9em' }}>Restarts: {pod.restarts}</div>
+                                                </div>
+                                                <div style={{ textAlign: 'right' }}>
+                                                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: 'white' }}>
+                                                        {dbStats[pod.name] !== undefined ? dbStats[pod.name].toLocaleString() : '-'}
+                                                    </div>
+                                                    <div style={{ fontSize: '10px', color: '#888' }}>STROKES</div>
+                                                </div>
+                                            </div>
                                         </li>
                                     ))}
                                 </ul>

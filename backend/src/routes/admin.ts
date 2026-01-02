@@ -94,4 +94,14 @@ router.get('/monitor', async (req: AuthRequest, res: Response) => {
     }
 });
 
+router.get('/monitor/db', async (req: AuthRequest, res: Response) => {
+    try {
+        const stats = await getPodStats('app=postgres');
+        res.json(stats);
+    } catch (err: any) {
+        console.error("DB Monitor Error", err);
+        res.status(500).json({ error: 'Failed to fetch DB pod stats' });
+    }
+});
+
 export default router;

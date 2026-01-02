@@ -53,6 +53,24 @@ app.get('/api/health', (req, res) => {
 
 // io.on connection handled in socket.ts
 
-httpServer.listen(PORT, () => {
+const server = httpServer.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
+});
+
+// Graceful Shutdown for K8s
+process.on('SIGTERM', () => {
+    console.log('SIGTERM received: closing HTTP server...');
+
+    // 1. Stop accepting new connections
+    server.close(() => {
+        console.log('HTTP server closed.');
+    });
+
+    // 2. Allow existing sockets to finish processing (Drain)
+    // In a high-load system, we give 10 seconds for the Event Loop to clear
+    // pending Redis writes (XADD).
+    setTimeout(() => {
+        console.log('Draining finished. Exiting.');
+        process.exit(0);
+    }, 10000); // 10s drain
 });
