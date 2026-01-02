@@ -99,7 +99,7 @@ The system is designed as a set of decoupled microservices:
 The system uses a dual-layer monitoring strategy:
 
 1.  **Infrastructure Level**: **Prometheus** scrapes metrics from the Kubernetes cluster, and **Grafana** provides long-term trend analysis and alerting.
-2.  **Application Level**: A built-in "God Mode" for real-time operational visibility.
+2.  **Application Level**: A built-in admin panel for real-time operational visibility.
 
 ###  Admin Panel
 
