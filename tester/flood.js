@@ -4,7 +4,7 @@ const { randomBytes } = require('crypto');
 const { Jimp } = require('jimp');
 
 // CONFIGURATION
-const TARGET_HOST = 'https://canvas.budd.codes';
+const TARGET_HOST = process.env.TARGET_HOST || 'http://k8s-default-painting-4f51e3beb2-618512250.ap-southeast-1.elb.amazonaws.com';
 const CONCURRENCY = 30;
 const CANVAS_ID = 'default';
 const IMG_URL = process.argv[2] || 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/1280px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg';
