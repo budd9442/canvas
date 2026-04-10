@@ -5,7 +5,8 @@ const { Jimp } = require('jimp');
 
 // CONFIGURATION
 const TARGET_HOST = process.env.TARGET_HOST || 'http://k8s-default-painting-4f51e3beb2-618512250.ap-southeast-1.elb.amazonaws.com';
-const CONCURRENCY = 30;
+const CONCURRENCY = parseInt(process.env.CONCURRENCY) || 100;
+const PAINT_INTERVAL = parseInt(process.env.INTERVAL) || 20;  // 20ms = 50 strokes per second per bot
 const CANVAS_ID = 'default';
 const IMG_URL = process.argv[2] || 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/1280px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg';
 
@@ -97,7 +98,7 @@ class ImageBot {
         this.socket.emit('draw_stroke', { canvasId: CANVAS_ID, stroke: stroke });
         global.totalStrokesSent++;
       }
-      setTimeout(paint, 50); // 20 RPS per bot
+      setTimeout(paint, PAINT_INTERVAL);
     };
     paint();
   }
