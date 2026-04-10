@@ -14,9 +14,9 @@ module "eks" {
   eks_managed_node_groups = {
     initial = {
       instance_types = ["t3.micro"]
-      min_size       = 2
-      max_size       = 5
-      desired_size   = 3
+      min_size       = 6
+      max_size       = 10
+      desired_size   = 6
 
       iam_role_additional_policies = {
          # Ensure SSM is available just in case we need shell access without SSH keys

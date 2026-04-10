@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: paint-backend
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
       app: paint-backend
