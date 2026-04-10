@@ -30,7 +30,7 @@ spec:
         - name: PORT
           value: "3000"
         - name: DB_SHARDS
-          value: '["postgresql://postgres:${DB_PASSWORD}@${RDS_ENDPOINT}/canvas_db"]'
+          value: '["postgresql://postgres:${DB_PASSWORD}@${RDS_ENDPOINT}/canvas_db?sslmode=no-verify"]'
         ports:
         - containerPort: 3000
 ---
