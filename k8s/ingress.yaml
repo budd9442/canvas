@@ -10,8 +10,7 @@ metadata:
     # Uncomment and replace the certificate-arn above once your ACM certificate is issued
 spec:
   rules:
-  - host: canvas.budd.codes
-    http:
+  - http:
       paths:
       - path: /
         pathType: Prefix
