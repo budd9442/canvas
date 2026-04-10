@@ -1,128 +1,112 @@
-# Distributed Collaborative Paint Canvas
+# Distributed Collaborative Paint Canvas 🎨
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Status](https://img.shields.io/badge/status-stable-green.svg)
-![Kubernetes](https://img.shields.io/badge/kubernetes-ready-blue.svg)
+![AWS](https://img.shields.io/badge/AWS-EKS_1.30-orange.svg)
+![Terraform](https://img.shields.io/badge/IaC-Terraform-blueviolet.svg)
+![Status](https://img.shields.io/badge/status-production_ready-green.svg)
 
-A real-time, distributed collaborative drawing application designed to demonstrate the principles of **Distributed Systems**, **High Availability**, and **Fault Tolerance**. Built with cloud-native technologies and deployed on Kubernetes.
+A real-time, distributed collaborative drawing application designed to demonstrate the principles of **Distributed Systems**, **High Availability**, and **GitOps-driven Cloud Orchestration**.
 
-##  Features
+---
 
-*   **Real-time Collaboration**: Multiple users drawing simultaneously with low latency using WebSockets.
-*   **Distributed Architecture**: Stateless backend replicas coordinated via Redis Pub/Sub.
-*   **High Availability**: Kubernetes deployment with auto-healing and load balancing.
-*   **Strong Consistency**: Global sequencing of strokes using Redis Atomic operations.
-*   **Scalability**: Horizontal Pod Autoscaling (HPA) based on CPU utilization.
-*   **Observability**: Real-time Admin Dashboard for monitoring pod health and user activity.
-*   **Secure**: JWT Authentication, RBAC, and SSL termination via Traefik.
+## 🏗 Choose Your Architecture
 
-##  Architecture
+This project evolved from a single-node VPS deployment into a professional, multi-AZ AWS cloud infrastructure. You can deploy it in two ways:
 
-The system is designed as a set of decoupled microservices:
+### 1. **AWS Production Deployment **
+*   **Infrastructure**: AWS EKS (Kubernetes), RDS (PostgreSQL), ElastiCache (Redis), Secrets Manager, ALB.
+*   **Logic**: Fully automated via Terraform (IaC) and GitHub Actions (CI/CD).
 
-*   **Ingress**: Traefik handles external traffic, SSL, and sticky routing.
-*   **Frontend**: React application (Vite + TailwindCSS) for the user interface.
-*   **Backend**: Node.js microservices handling WebSocket connections and logic.
-*   **Data Layer**:
-    *   **Redis**: Used for distributed locks, stroke sequencing, and pub/sub messaging.
-    *   **PostgreSQL**: Persistent storage for user data and canvas history.
+### 2. **Local / VPS Deployment **
+*   **Infrastructure**: Lightweight `k3s` cluster, Docker Compose, or manual Node.js.
+*   **Logic**: Standard `kubectl apply` manifests.
+*   **Location**: Legacy manifests are preserved in the [`k83-vps/`](./k83-vps/) directory.
 
-##  Tech Stack
+---
 
-| Component | Technology |
-|-----------|------------|
-| **Frontend** | React, TypeScript, Fabric.js, TailwindCSS |
-| **Backend** | Node.js, Express, Socket.IO, TypeScript |
-| **Database** | PostgreSQL 15, Redis 7 |
-| **Infrastructure** | Docker, Kubernetes, Traefik, CertManager |
-| **Monitoring** | Prometheus, Grafana, Custom K8s Watcher |
-
-##  Getting Started
+## 🚀 AWS Enterprise Deployment (EKS)
 
 ### Prerequisites
+*   AWS CLI configured with Admin permissions.
+*   Terraform 1.5+
+*   kubectl & Helm
 
-*   Node.js 18+
-*   Docker & Kubernetes (Minikube or Kind recommended)
-*   Redis & PostgreSQL (for local non-k8s run)
-*   *Optional*: Prometheus & Grafana (for full observability metrics)
-
-###  Local Development (Non-K8s)
-
-1.  **Start Infrastructure Services**
-    Ensure you have Redis and Postgres running locally or via Docker:
-    ```bash
-    docker run -d -p 6379:6379 redis:7
-    docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=canvas_db postgres:15
-    ```
-
-2.  **Backend Setup**
-    ```bash
-    cd backend
-    mv .env.example .env # Configure your DB credentials
-    npm install
-    npm run dev
-    ```
-
-3.  **Frontend Setup**
-    ```bash
-    cd frontend
-    npm install
-    npm run dev
-    ```
-
-4.  **Access App**
-    Open `http://localhost:5173` to draw.
-    Open `http://localhost:5173/admin` (after logging in as admin) to view the dashboard.
-
-###  Kubernetes Deployment
-
-1.  **Build Docker Images**
-    ```bash
-    docker build -t paint-backend:v19 ./backend
-    docker build -t paint-frontend:v16 ./frontend
-    ```
-
-2.  **Deploy to Cluster**
-    ```bash
-    # Apply all manifests (ConfigMaps, Secrets, Deployments, Services)
-    kubectl apply -f k8s/
-    
-    # NOTE: Prometheus & Grafana are expected to be installed via Helm
-    # The ingress rule in k8s/monitor-ingress.yaml will route to the 'monitor-grafana' service
-    ```
-
-3.  **Access**
-    The ingress is configured for `canvas.budd.codes`. Ensure this resolves to your cluster IP.
-
-##  Monitoring & Observability
-
-The system uses a dual-layer monitoring strategy:
-
-1.  **Infrastructure Level**: **Prometheus** scrapes metrics from the Kubernetes cluster, and **Grafana** provides long-term trend analysis and alerting.
-2.  **Application Level**: A built-in admin panel for real-time operational visibility.
-
-###  Admin Panel
-
-*   **Access**: Log in as a user with `role: admin`.
-*   **Toggle Panel**: Click the floating "Admin" button on the right edge.
-*   **Features**:
-    *   **Infra Tab**: View live Kubernetes Pod status, IP addresses, and HPA autoscaling graphs.
-    *   **Users Tab**: See connected users in real-time and ban abusive users.
-    *   **Canvas Tab**: Emergency "Clear Canvas" functionality.
-
-##  Load Testing
-
-We include a specialized distributed load tester to simulate high concurrency scenarios.
-
+### Step 1: Bootstrap the State
+Before deploying the main resources, initialize the remote S3 backend and DynamoDB state lock:
 ```bash
-cd tester
-npm install
-
-# Usage: node flood.js <image_url>
-# Simulate 50 concurrent "bot" painters reproducing a Van Gogh painting
-node flood.js https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/1280px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg
+cd terraform/bootstrap
+terraform init && terraform apply
 ```
 
-##  License
+### Step 2: Provision Infrastructure
+Update `terraform/main/provider.tf` with the S3 bucket name from the bootstrap step, then:
+```bash
+cd terraform/main
+terraform init
+terraform apply
+```
+*This will provision a custom VPC, EKS Cluster, RDS Postgres, and ElastiCache Redis (~15-20 mins).*
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+### Step 3: GitOps Rollout
+1.  Add your `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` to GitHub Repository Secrets.
+2.  Push a change to the `master` branch.
+3.  The [Deployment Workflow](./.github/workflows/deploy.yaml) will automatically build the images, push to ECR, and deploy to EKS.
+
+---
+
+## 🐧 Legacy VPS Deployment (k3s)
+
+If you are deploying to a standard Linux VPS using `k3s`:
+
+1.  **Ensure k3s is installed**: `curl -sfL https://get.k3s.io | sh -`
+2.  **Deploy Manifests**:
+    ```bash
+    kubectl apply -f k83-vps/
+    ```
+3.  **Config**: Update the `Ingress` in `k83-vps/ingress.yaml` with your VPS IP or public domain.
+
+---
+
+## 🛠 Tech Stack
+
+| Component | AWS Technology | VPS/Local Technology |
+|-----------|----------------|----------------------|
+| **Kubernetes** | Amazon EKS (Managed) | k3s (Lightweight) |
+| **Database** | Amazon RDS (PostgreSQL) | In-cluster Postgres Pod |
+| **Cache** | Amazon ElastiCache (Redis) | In-cluster Redis Pod |
+| **Ingress** | AWS Load Balancer (ALB) | Traefik / Nginx |
+| **Secrets** | AWS Secrets Manager | K8s Secrets (Base64) |
+| **Registry** | Amazon ECR | Docker Hub |
+| **IaC** | Terraform | Manual Manifests |
+
+---
+
+## 📉 Stress Testing & HPA
+The system is built to breathe. We’ve included a "Bot Army" tester to verify Horizontal Pod Autoscaling (HPA).
+
+1.  **Install Tester**:
+    ```bash
+    cd tester
+    npm install
+    ```
+2.  **Run "Starry Night" Attack**:
+    ```bash
+    # Simulates 250 concurrent bots drawing a Van Gogh painting
+    CONCURRENCY=250 INTERVAL=10 node flood.js
+    ```
+3.  **Monitor Scaling**:
+    ```bash
+    kubectl get hpa paint-backend -w
+    ```
+
+---
+
+## 📚 Related Documentation
+*   [Architecture Diagram](./architecture_diagram.md): Full Mermaid.js visual of the AWS VPC.
+*   [Migration Journey](./eks_migration_blog.md): The full story of the k3s to EKS transition.
+*   [Walkthrough](./walkthrough.md): Developer notes on the latest infrastructure updates.
+
+---
+
+## 📄 License
+This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.
