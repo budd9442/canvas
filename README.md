@@ -98,14 +98,7 @@ The system is built to breathe. We’ve included a "Bot Army" tester to verify H
     ```bash
     kubectl get hpa paint-backend -w
     ```
-
----
-
-## 📚 Related Documentation
-*   [Architecture Diagram](./architecture_diagram.md): Full Mermaid.js visual of the AWS VPC.
-*   [Migration Journey](./eks_migration_blog.md): The full story of the k3s to EKS transition.
-*   [Walkthrough](./walkthrough.md): Developer notes on the latest infrastructure updates.
-
+    
 ---
 
 ## 📄 License
