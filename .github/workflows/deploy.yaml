@@ -55,7 +55,7 @@ jobs:
           docker push $ECR_REGISTRY/$FRONTEND_REPO:$IMAGE_TAG
 
   deploy:
-    name: Update K8s Manifests & Deploy (GitOps Simulation)
+    name: Update K8s Manifests & Deploy
     runs-on: ubuntu-latest
     needs: build-and-push
     steps:
