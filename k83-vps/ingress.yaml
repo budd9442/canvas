@@ -3,12 +3,15 @@ kind: Ingress
 metadata:
   name: paint-ingress
   annotations:
-    kubernetes.io/ingress.class: alb
-    alb.ingress.kubernetes.io/scheme: internet-facing
-    alb.ingress.kubernetes.io/target-type: ip
-    # alb.ingress.kubernetes.io/certificate-arn: "${ACM_CERT_ARN}" 
-    # Uncomment and replace the certificate-arn above once your ACM certificate is issued
+    kubernetes.io/ingress.class: traefik
+    traefik.ingress.kubernetes.io/service.sticky.cookie: "true"
+    traefik.ingress.kubernetes.io/service.sticky.cookie.name: "io"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
 spec:
+  tls:                              # <--- NEW SECTION
+  - hosts:
+    - canvas.budd.codes
+    secretName: canvas-tls
   rules:
   - host: canvas.budd.codes
     http:

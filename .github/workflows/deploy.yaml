@@ -1,0 +1,107 @@
+name: Deploy to EKS GitOps Pipeline
+
+on:
+  push:
+    branches:
+      - master
+
+env:
+  AWS_REGION: "ap-southeast-1"
+  BACKEND_REPO: "paint-backend"
+  FRONTEND_REPO: "paint-frontend"
+
+jobs:
+  build-and-push:
+    name: Build & Push to ECR
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.commit.outputs.short_sha }}
+      ecr_registry: ${{ steps.login-ecr.outputs.registry }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set Image Tag
+        id: commit
+        run: echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and Push Backend Image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ steps.commit.outputs.short_sha }}
+        run: |
+          cd backend
+          docker build -t $ECR_REGISTRY/$BACKEND_REPO:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$BACKEND_REPO:$IMAGE_TAG
+
+      - name: Build and Push Frontend Image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ steps.commit.outputs.short_sha }}
+        run: |
+          cd frontend
+          docker build -t $ECR_REGISTRY/$FRONTEND_REPO:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$FRONTEND_REPO:$IMAGE_TAG
+
+  deploy:
+    name: Update K8s Manifests & Deploy (GitOps Simulation)
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup kubeconfig
+        run: |
+          aws eks update-kubeconfig --name canvas-prod --region ${{ env.AWS_REGION }}
+
+      - name: Fetch Secrets from AWS
+        id: fetch-secrets
+        run: |
+          # Dynamically find the DB secret name and fetch its string
+          SECRET_NAME=$(aws secretsmanager list-secrets --query "SecretList[?starts_with(Name, 'canvas-prod-db-credentials-')].Name" --output text | head -n 1)
+          SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" --query SecretString --output text)
+          
+          echo "rds_endpoint=$(echo $SECRET_JSON | jq -r .host)" >> $GITHUB_OUTPUT
+          echo "redis_endpoint=$(echo $SECRET_JSON | jq -r .redis_endpoint)" >> $GITHUB_OUTPUT
+          
+          # We use a GITHUB_ENV variable for password but MUST mask it
+          DB_PASS=$(echo $SECRET_JSON | jq -r .password)
+          echo "::add-mask::$DB_PASS"
+          echo "DB_PASSWORD=$DB_PASS" >> $GITHUB_ENV
+
+      - name: Prepare Manifests
+        env:
+          ECR_REGISTRY: ${{ needs.build-and-push.outputs.ecr_registry }}
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+          RDS_ENDPOINT: ${{ steps.fetch-secrets.outputs.rds_endpoint }}
+          REDIS_ENDPOINT: ${{ steps.fetch-secrets.outputs.redis_endpoint }}
+        run: |
+          export ECR_BACKEND_IMAGE="$ECR_REGISTRY/$BACKEND_REPO:$IMAGE_TAG"
+          export ECR_FRONTEND_IMAGE="$ECR_REGISTRY/$FRONTEND_REPO:$IMAGE_TAG"
+          
+          # Use envsubst to substitute variables in the template safely
+          envsubst < k8s/backend.yaml > k8s/backend-tmp.yaml && mv k8s/backend-tmp.yaml k8s/backend.yaml
+          envsubst < k8s/frontend.yaml > k8s/frontend-tmp.yaml && mv k8s/frontend-tmp.yaml k8s/frontend.yaml
+
+      - name: Deploy to EKS
+        run: |
+           kubectl apply -f k8s/

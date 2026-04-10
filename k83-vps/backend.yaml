@@ -15,22 +15,22 @@ spec:
       serviceAccountName: backend-sa
       containers:
       - name: backend
-        image: ${ECR_BACKEND_IMAGE}
-        imagePullPolicy: Always
+        image: paint-backend:v19
+        imagePullPolicy: Never
         resources:
           requests:
-            cpu: "400m"   
+            cpu: "400m"   # 0.4 CPU (Further increased)
             memory: "256Mi"
           limits:
             cpu: "800m"   # 0.8 CPU
             memory: "512Mi"
         env:
         - name: REDIS_URL
-          value: "redis://${REDIS_ENDPOINT}:6379"
+          value: "redis://redis:6379"
         - name: PORT
           value: "3000"
         - name: DB_SHARDS
-          value: '["postgresql://postgres:${DB_PASSWORD}@${RDS_ENDPOINT}:5432/canvas_db"]'
+          value: '["postgresql://postgres:postgres@postgres-0.postgres:5432/canvas_db","postgresql://postgres:postgres@postgres-1.postgres:5432/canvas_db"]'
         ports:
         - containerPort: 3000
 ---

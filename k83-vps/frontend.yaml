@@ -14,8 +14,8 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: ${ECR_FRONTEND_IMAGE}
-        imagePullPolicy: Always
+        image: paint-frontend:v16
+        imagePullPolicy: Never
         ports:
         - containerPort: 80
 ---
